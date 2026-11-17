@@ -13,6 +13,8 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.location.LocationManager
 import android.media.AudioManager
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.media.ToneGenerator
 import android.os.BatteryManager
 import android.os.Build
@@ -59,6 +61,8 @@ class AgentServerService : Service() {
     private val pairLock = Any()
     @Volatile private var running = false
     private var serverSocket: ServerSocket? = null
+    private var nsdManager: NsdManager? = null
+    private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
     private var toneGenerator: ToneGenerator? = null
     private var failedPairAttempts = 0
     @Volatile private var pairBlockedUntil = 0L
@@ -73,14 +77,7 @@ class AgentServerService : Service() {
             return START_NOT_STICKY
         }
 
-        val code = intent?.getStringExtra(EXTRA_PAIR_CODE)
-        if (!code.isNullOrBlank()) {
-            val preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            preferences.edit()
-                .putString("pair_code", code)
-                .putLong("pair_expires", System.currentTimeMillis() + 5 * 60 * 1000L)
-                .apply()
-        }
+        
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildServiceNotification())
@@ -105,6 +102,7 @@ class AgentServerService : Service() {
                 socket.reuseAddress = true
                 socket.bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), SERVER_PORT), 8)
                 serverSocket = socket
+                registerNsdService()
                 while (running) {
                     val client = socket.accept()
                     clients.execute {
@@ -131,10 +129,30 @@ class AgentServerService : Service() {
         }
     }
 
+    private fun registerNsdService() {
+        val manager = getSystemService(NsdManager::class.java) ?: return
+        nsdManager = manager
+        val info = NsdServiceInfo().apply {
+            serviceName = "Kerynth Remote Agent"
+            serviceType = "_kerynthremote._tcp."
+            port = SERVER_PORT
+        }
+        val listener = object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {}
+            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+            override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {}
+            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+        }
+        nsdRegistrationListener = listener
+        runCatching { manager.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener) }
+    }
+
     private fun stopServer() {
         running = false
         runCatching { serverSocket?.close() }
         serverSocket = null
+        nsdRegistrationListener?.let { listener -> runCatching { nsdManager?.unregisterService(listener) } }
+        nsdRegistrationListener = null
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("server_running", false).apply()
         toneGenerator?.stopTone()
     }
@@ -163,35 +181,17 @@ class AgentServerService : Service() {
                         writeJson(output, JSONObject().put("ok", false).put("error", "already_paired"))
                         return
                     }
-                    if (System.currentTimeMillis() < pairBlockedUntil) {
-                        writeJson(output, JSONObject().put("ok", false).put("error", "try_later"))
+                    val approvedUntil = preferences.getLong("pairing_approved_until", 0L)
+                    if (System.currentTimeMillis() > approvedUntil) {
+                        writeJson(output, JSONObject().put("ok", false).put("error", "approval_required"))
                         return
                     }
-                    val pairCode = preferences.getString("pair_code", null)
-                    val expires = preferences.getLong("pair_expires", 0L)
-                    if (pairCode.isNullOrBlank() || System.currentTimeMillis() > expires) {
-                        writeJson(output, JSONObject().put("ok", false).put("error", "pair_code_expired"))
-                        return
-                    }
-                    val expected = encode(hmac(pairCode.toByteArray(StandardCharsets.UTF_8), challenge))
-                    val supplied = handshake.optString("pairProof")
-                    if (!constantTimeEquals(expected, supplied)) {
-                        failedPairAttempts++
-                        if (failedPairAttempts >= 5) {
-                            failedPairAttempts = 0
-                            pairBlockedUntil = System.currentTimeMillis() + 60_000L
-                        }
-                        writeJson(output, JSONObject().put("ok", false).put("error", "invalid_pair_code"))
-                        return
-                    }
-                    failedPairAttempts = 0
-                    val token = deriveToken(pairCode, deviceId)
+                    val token = encode(randomBytes(32))
                     preferences.edit()
                         .putString("auth_token", token)
-                        .remove("pair_code")
-                        .remove("pair_expires")
+                        .remove("pairing_approved_until")
                         .apply()
-                    writeJson(output, JSONObject().put("paired", true).put("deviceId", deviceId))
+                    writeJson(output, JSONObject().put("paired", true).put("token", token).put("deviceId", deviceId))
                     return
                 }
             }
