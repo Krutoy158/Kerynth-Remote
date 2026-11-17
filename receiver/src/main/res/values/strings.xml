@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="device_admin_description">Allows Kerynth Remote to lock this device when the owner activates Lost Mode.</string>
+</resources>
