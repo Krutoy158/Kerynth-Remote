@@ -7,12 +7,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,16 +34,18 @@ jobs:
           gradle-version: 8.11.1
 
       - name: Build Agent and Console APKs
-        run: gradle :receiver:assembleDebug :console:assembleDebug
+        run: gradle --no-daemon --stacktrace :receiver:assembleDebug :console:assembleDebug
 
       - name: Upload Agent APK
         uses: actions/upload-artifact@v4
         with:
           name: Kerynth-Remote-Agent-debug
           path: receiver/build/outputs/apk/debug/receiver-debug.apk
+          if-no-files-found: error
 
       - name: Upload Console APK
         uses: actions/upload-artifact@v4
         with:
           name: Kerynth-Remote-Console-debug
           path: console/build/outputs/apk/debug/console-debug.apk
+          if-no-files-found: error
