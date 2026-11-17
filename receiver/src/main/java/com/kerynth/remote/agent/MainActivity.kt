@@ -271,7 +271,18 @@ private fun AgentScreen(
     onRevokePairing: () -> Unit
 ) {
     val receivedImage = androidx.compose.runtime.remember(lastImagePath) {
-        lastImagePath?.let { path -> runCatching { BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() }
+        lastImagePath?.let { path ->
+            runCatching {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, bounds)
+                var sampleSize = 1
+                while (bounds.outWidth / sampleSize > 1400 || bounds.outHeight / sampleSize > 1400) {
+                    sampleSize *= 2
+                }
+                val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                BitmapFactory.decodeFile(path, options)?.asImageBitmap()
+            }.getOrNull()
+        }
     }
 
     MaterialTheme {
