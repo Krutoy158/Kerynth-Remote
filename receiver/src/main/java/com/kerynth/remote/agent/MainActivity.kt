@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
     private var screenCaptureActive by mutableStateOf(false)
     private var serverRunning by mutableStateOf(false)
     private var pairingCode by mutableStateOf("")
+    private var pairingApprovalReady by mutableStateOf(false)
     private var paired by mutableStateOf(false)
     private var localAddress by mutableStateOf("")
     private var lastImagePath by mutableStateOf<String?>(null)
@@ -114,6 +115,7 @@ class MainActivity : ComponentActivity() {
                 screenCaptureActive = screenCaptureActive,
                 serverRunning = serverRunning,
                 pairingCode = pairingCode,
+                pairingApprovalReady = pairingApprovalReady,
                 paired = paired,
                 localAddress = localAddress,
                 lastImagePath = lastImagePath,
@@ -128,7 +130,8 @@ class MainActivity : ComponentActivity() {
                 onRebootDevice = ::rebootDevice,
                 onStartServer = ::startServer,
                 onStopServer = ::stopServer,
-                onRevokePairing = ::revokePairing
+                onRevokePairing = ::revokePairing,
+                onAllowPairing = ::allowPairing
             )
         }
     }
@@ -153,7 +156,8 @@ class MainActivity : ComponentActivity() {
         touchControlEnabled = KerynthControlAccessibilityService.isEnabled(this)
         screenCaptureActive = ScreenCaptureService.isActive()
         serverRunning = preferences.getBoolean("server_running", false)
-        pairingCode = preferences.getString("pair_code", "") ?: ""
+        pairingCode = ""
+        pairingApprovalReady = preferences.getLong("pairing_approved_until", 0L) > System.currentTimeMillis()
         paired = preferences.getString("auth_token", null) != null
         localAddress = getLocalIpv4Address()
         lastImagePath = preferences.getString("last_image_path", null)
@@ -226,54 +230,39 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startServer() {
-        val existingToken = preferences.getString("auth_token", null)
-        val code = if (existingToken == null) {
-            val codeBytes = ByteArray(9).also { SecureRandom().nextBytes(it) }
-            Base64.encodeToString(
-                codeBytes,
-                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-            ).also {
-                preferences.edit()
-                    .putString("pair_code", it)
-                    .putLong("pair_expires", System.currentTimeMillis() + 5 * 60 * 1000L)
-                    .apply()
-            }
-        } else {
-            preferences.edit().remove("pair_code").remove("pair_expires").apply()
-            ""
-        }
-        val intent = Intent(this, AgentServerService::class.java).setAction(AgentServerService.ACTION_START)
-        if (code.isNotBlank()) intent.putExtra(AgentServerService.EXTRA_PAIR_CODE, code)
-        startForegroundService(intent)
-        pairingCode = code
-        paired = existingToken != null
+        preferences.edit().remove("pair_code").remove("pair_expires").apply()
+        startForegroundService(Intent(this, AgentServerService::class.java).setAction(AgentServerService.ACTION_START))
+        pairingCode = ""
+        paired = preferences.getString("auth_token", null) != null
         serverRunning = true
         localAddress = getLocalIpv4Address()
+    }
+
+    private fun allowPairing() {
+        preferences.edit()
+            .putLong("pairing_approved_until", System.currentTimeMillis() + 60_000L)
+            .apply()
+        pairingApprovalReady = true
     }
 
     private fun stopServer() {
         startService(Intent(this, AgentServerService::class.java).setAction(AgentServerService.ACTION_STOP))
         serverRunning = false
+        pairingApprovalReady = false
     }
 
     private fun revokePairing() {
-        val codeBytes = ByteArray(9).also { SecureRandom().nextBytes(it) }
-        val code = Base64.encodeToString(
-            codeBytes,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-        )
         preferences.edit()
             .remove("auth_token")
-            .putString("pair_code", code)
-            .putLong("pair_expires", System.currentTimeMillis() + 5 * 60 * 1000L)
+            .remove("pairing_approved_until")
             .apply()
-        val intent = Intent(this, AgentServerService::class.java)
-            .setAction(AgentServerService.ACTION_START)
-            .putExtra(AgentServerService.EXTRA_PAIR_CODE, code)
-        if (serverRunning) startService(intent) else startForegroundService(intent)
-        pairingCode = code
+        pairingCode = ""
         paired = false
-        serverRunning = true
+        pairingApprovalReady = false
+        if (!serverRunning) {
+            startForegroundService(Intent(this, AgentServerService::class.java).setAction(AgentServerService.ACTION_START))
+            serverRunning = true
+        }
     }
 
     private fun getLocalIpv4Address(): String {
@@ -301,6 +290,7 @@ private fun AgentScreen(
     screenCaptureActive: Boolean,
     serverRunning: Boolean,
     pairingCode: String,
+    pairingApprovalReady: Boolean,
     paired: Boolean,
     localAddress: String,
     lastImagePath: String?,
@@ -315,7 +305,8 @@ private fun AgentScreen(
     onRebootDevice: () -> Unit,
     onStartServer: () -> Unit,
     onStopServer: () -> Unit,
-    onRevokePairing: () -> Unit
+    onRevokePairing: () -> Unit,
+    onAllowPairing: () -> Unit
 ) {
     val receivedImage = androidx.compose.runtime.remember(lastImagePath) {
         lastImagePath?.let { path ->
@@ -403,15 +394,21 @@ private fun AgentScreen(
                         "Адрес: " + if (localAddress.isNotBlank()) "$localAddress:${AgentServerService.SERVER_PORT}" else "IP не определён",
                         color = Color.White
                     )
-                    if (!paired && pairingCode.isNotBlank() && serverRunning) {
-                        Text("Одноразовый код сопряжения", color = Color(0xFF9EADBF), fontSize = 12.sp)
-                        Text(pairingCode, color = Color(0xFF9CCBFF), fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                        Text("Код действует 5 минут и используется один раз.", color = Color(0xFF9EADBF), fontSize = 12.sp)
+                    if (!paired && serverRunning) {
+                        Text(
+                            if (pairingApprovalReady) "Ожидаю подключения Console — подтверждение действительно 60 секунд."
+                            else "Для первого подключения подтверди сопряжение здесь.",
+                            color = Color(0xFF9EADBF),
+                            fontSize = 12.sp
+                        )
+                        Button(onClick = onAllowPairing, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (pairingApprovalReady) "Разрешение активно" else "Разрешить первое подключение")
+                        }
                     }
                     if (paired) {
                         Text("Console сопряжена", color = Color(0xFF86D6A3), fontWeight = FontWeight.SemiBold)
                         OutlinedButton(onClick = onRevokePairing, modifier = Modifier.fillMaxWidth()) {
-                            Text("Отозвать доступ и создать новый код")
+                            Text("Отозвать доступ")
                         }
                     }
                     Button(
@@ -421,7 +418,7 @@ private fun AgentScreen(
                         Text(if (serverRunning) "Остановить Agent" else "Запустить Agent")
                     }
                     Text(
-                        "Команды защищены одноразовым кодом, HMAC-проверкой и AES-GCM шифрованием. Для доступа из другой сети потребуется интернет-сервер.",
+                        "Первое сопряжение требует подтверждения на Agent. После этого доступ защищён ключом и AES-GCM шифрованием. Для доступа из другой сети потребуется интернет-сервер.",
                         color = Color(0xFF8193A9),
                         fontSize = 12.sp
                     )
