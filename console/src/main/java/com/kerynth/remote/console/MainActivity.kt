@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.InputStream
@@ -123,7 +124,7 @@ class MainActivity : ComponentActivity() {
                     val derivedToken = Socket().use { socket ->
                         socket.connect(InetSocketAddress(target, SERVER_PORT), 5000)
                         socket.soTimeout = 10000
-                        val input = socket.getInputStream()
+                        val input = BufferedInputStream(socket.getInputStream())
                         val output = socket.getOutputStream()
                         val greeting = JSONObject(readLine(input, 16_384))
                         val challenge = decode(greeting.getString("challenge"))
@@ -267,7 +268,7 @@ class MainActivity : ComponentActivity() {
         return Socket().use { socket ->
             socket.connect(InetSocketAddress(target, SERVER_PORT), 5000)
             socket.soTimeout = 30_000
-            val input = socket.getInputStream()
+            val input = BufferedInputStream(socket.getInputStream())
             val output = socket.getOutputStream()
             val greeting = JSONObject(readLine(input, 16_384))
             val challenge = decode(greeting.getString("challenge"))
