@@ -262,6 +262,152 @@ class MainActivity : ComponentActivity() {
         messageText = ""
     }
 
+    private fun sendControlRequest(request: JSONObject) {
+        val target = host.trim()
+        val token = preferences.getString("auth_token", null)
+        if (target.isBlank() || token.isNullOrBlank()) {
+            status = "Сначала подключи и сопряги Agent."
+            return
+        }
+        executor.execute {
+            runCatching { sendAuthenticated(target, token, request) }
+                .onSuccess { response ->
+                    if (!response.optBoolean("ok")) {
+                        runOnUiThread { status = errorText(response.optString("error")) }
+                    }
+                }
+                .onFailure { error ->
+                    runOnUiThread { status = error.message ?: "Ошибка управления" }
+                }
+        }
+    }
+
+    private fun sendTap(x: Double, y: Double) {
+        sendControlRequest(
+            JSONObject()
+                .put("command", "tap")
+                .put("x", x.coerceIn(0.0, 1.0))
+                .put("y", y.coerceIn(0.0, 1.0))
+        )
+    }
+
+    private fun sendSwipe(startX: Double, startY: Double, endX: Double, endY: Double) {
+        sendControlRequest(
+            JSONObject()
+                .put("command", "swipe")
+                .put("startX", startX.coerceIn(0.0, 1.0))
+                .put("startY", startY.coerceIn(0.0, 1.0))
+                .put("endX", endX.coerceIn(0.0, 1.0))
+                .put("endY", endY.coerceIn(0.0, 1.0))
+                .put("duration", 350)
+        )
+    }
+
+    private fun sendNavigation(action: String) {
+        sendControlRequest(JSONObject().put("command", "navigate").put("action", action))
+    }
+
+    private fun sendTypedText() {
+        val value = typedText
+        if (value.length > 2000) {
+            status = "Лимит ввода — 2000 символов."
+            return
+        }
+        sendControlRequest(JSONObject().put("command", "text").put("value", value))
+        typedText = ""
+    }
+
+    private fun loadApps() {
+        if (!paired || busy) return
+        val target = host.trim()
+        val token = preferences.getString("auth_token", null) ?: return
+        busy = true
+        status = "Загружаю список приложений…"
+        executor.execute {
+            try {
+                val response = sendAuthenticated(target, token, JSONObject().put("command", "list_apps"))
+                if (!response.optBoolean("ok")) {
+                    throw IllegalStateException(errorText(response.optString("error")))
+                }
+                val array = response.optJSONArray("apps") ?: org.json.JSONArray()
+                val entries = (0 until array.length()).mapNotNull { index ->
+                    val item = array.optJSONObject(index) ?: return@mapNotNull null
+                    val label = item.optString("label").take(80)
+                    val packageName = item.optString("packageName").take(255)
+                    if (label.isBlank() || packageName.isBlank()) null else AppEntry(label, packageName)
+                }
+                runOnUiThread {
+                    installedApps = entries
+                    status = "Найдено приложений: ${entries.size}"
+                }
+            } catch (error: Exception) {
+                runOnUiThread { status = error.message ?: "Не удалось загрузить приложения" }
+            } finally {
+                runOnUiThread { busy = false }
+            }
+        }
+    }
+
+    private fun openApp(packageName: String) {
+        sendControlRequest(JSONObject().put("command", "open_app").put("packageName", packageName))
+    }
+
+    private fun startScreenStream() {
+        if (screenStreaming) return
+        if (!paired) {
+            status = "Сначала сопряги Agent."
+            return
+        }
+        val target = host.trim()
+        val token = preferences.getString("auth_token", null)
+        if (target.isBlank() || token.isNullOrBlank()) {
+            status = "Нет сохранённого подключения."
+            return
+        }
+        screenStreaming = true
+        status = "Подключаю трансляцию…"
+        screenTask = screenExecutor.scheduleWithFixedDelay({
+            if (!screenStreaming) return@scheduleWithFixedDelay
+            runCatching {
+                sendAuthenticated(target, token, JSONObject().put("command", "screen_frame"))
+            }.onSuccess { response ->
+                if (response.optBoolean("ok")) {
+                    val bytes = decode(response.optString("frame"))
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bitmap != null) {
+                        runOnUiThread {
+                            screenFrame = bitmap
+                            status = "Экран транслируется"
+                        }
+                    }
+                } else {
+                    val error = response.optString("error")
+                    if (error != "screen_frame_pending") {
+                        runOnUiThread {
+                            status = errorText(error)
+                            screenStreaming = false
+                            screenFrame = null
+                            screenTask?.cancel(false)
+                        }
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    status = error.message ?: "Связь с Agent потеряна"
+                }
+            }
+        }, 0, 750, TimeUnit.MILLISECONDS)
+    }
+
+    private fun stopScreenStream() {
+        screenStreaming = false
+        screenTask?.cancel(false)
+        screenTask = null
+        screenFrame = null
+        sendControlRequest(JSONObject().put("command", "screen_stop"))
+        status = "Трансляция остановлена."
+    }
+
     private fun sendImage(uri: Uri) {
         if (busy) return
         val target = host.trim()
@@ -409,6 +555,11 @@ class MainActivity : ComponentActivity() {
             "location_unavailable" -> "Последняя известная геопозиция недоступна."
             "notification_permission_required" -> "На Agent не разрешены уведомления."
             "image_too_large" -> "Изображение превышает лимит 3 МБ."
+            "accessibility_service_required" -> "На Agent включи Kerynth Remote Touch Control в настройках специальных возможностей."
+            "no_focused_text_field" -> "Сначала нажми на поле ввода на удалённом экране."
+            "screen_capture_not_active" -> "Сначала подтверди трансляцию экрана на Agent."
+            "screen_frame_pending" -> "Подготавливаю кадр экрана…"
+            "invalid_coordinates" -> "Некорректные координаты касания."
             else -> code.ifBlank { "Неизвестная ошибка" }
         }
     }
