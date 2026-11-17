@@ -20,6 +20,7 @@ import android.os.IBinder
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.File
@@ -139,7 +140,7 @@ class AgentServerService : Service() {
     }
 
     private fun handleClient(socket: Socket) {
-        val input = socket.getInputStream()
+        val input = BufferedInputStream(socket.getInputStream())
         val output = socket.getOutputStream()
         try {
             val preferences = getSharedPreferences(PREFS, MODE_PRIVATE)
