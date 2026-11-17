@@ -229,6 +229,8 @@ class AgentServerService : Service() {
             "list_apps" -> listApps()
             "open_app" -> openApp(request)
             "text" -> setFocusedText(request)
+            "screen_frame" -> screenFrame()
+            "screen_stop" -> stopScreenCapture()
             else -> JSONObject().put("ok", false).put("error", "unknown_command")
         }
     }
