@@ -184,22 +184,27 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startServer() {
-        val codeBytes = ByteArray(9).also { SecureRandom().nextBytes(it) }
-        val code = Base64.encodeToString(
-            codeBytes,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-        )
-        preferences.edit()
-            .putString("pair_code", code)
-            .putLong("pair_expires", System.currentTimeMillis() + 5 * 60 * 1000L)
-            .remove("auth_token")
-            .apply()
-        val intent = Intent(this, AgentServerService::class.java)
-            .setAction(AgentServerService.ACTION_START)
-            .putExtra(AgentServerService.EXTRA_PAIR_CODE, code)
+        val existingToken = preferences.getString("auth_token", null)
+        val code = if (existingToken == null) {
+            val codeBytes = ByteArray(9).also { SecureRandom().nextBytes(it) }
+            Base64.encodeToString(
+                codeBytes,
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            ).also {
+                preferences.edit()
+                    .putString("pair_code", it)
+                    .putLong("pair_expires", System.currentTimeMillis() + 5 * 60 * 1000L)
+                    .apply()
+            }
+        } else {
+            preferences.edit().remove("pair_code").remove("pair_expires").apply()
+            ""
+        }
+        val intent = Intent(this, AgentServerService::class.java).setAction(AgentServerService.ACTION_START)
+        if (code.isNotBlank()) intent.putExtra(AgentServerService.EXTRA_PAIR_CODE, code)
         startForegroundService(intent)
         pairingCode = code
-        paired = false
+        paired = existingToken != null
         serverRunning = true
         localAddress = getLocalIpv4Address()
     }
