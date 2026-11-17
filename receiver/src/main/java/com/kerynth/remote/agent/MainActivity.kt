@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -56,12 +57,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var adminComponent: ComponentName
     private lateinit var locationPermissionLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var screenCaptureLauncher: ActivityResultLauncher<Intent>
 
     private var adminActive by mutableStateOf(false)
     private var deviceOwner by mutableStateOf(false)
     private var locationGranted by mutableStateOf(false)
     private var backgroundLocationGranted by mutableStateOf(false)
     private var notificationsGranted by mutableStateOf(false)
+    private var touchControlEnabled by mutableStateOf(false)
+    private var screenCaptureActive by mutableStateOf(false)
     private var serverRunning by mutableStateOf(false)
     private var pairingCode by mutableStateOf("")
     private var paired by mutableStateOf(false)
@@ -83,6 +87,20 @@ class MainActivity : ComponentActivity() {
             ActivityResultContracts.RequestPermission()
         ) { refreshState() }
 
+        screenCaptureLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            val data = result.data
+            if (result.resultCode == RESULT_OK && data != null) {
+                val serviceIntent = Intent(this, ScreenCaptureService::class.java)
+                    .setAction(ScreenCaptureService.ACTION_START)
+                    .putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                    .putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+                startForegroundService(serviceIntent)
+            }
+            refreshState()
+        }
+
         refreshState()
 
         setContent {
@@ -92,6 +110,8 @@ class MainActivity : ComponentActivity() {
                 locationGranted = locationGranted,
                 backgroundLocationGranted = backgroundLocationGranted,
                 notificationsGranted = notificationsGranted,
+                touchControlEnabled = touchControlEnabled,
+                screenCaptureActive = screenCaptureActive,
                 serverRunning = serverRunning,
                 pairingCode = pairingCode,
                 paired = paired,
@@ -100,6 +120,9 @@ class MainActivity : ComponentActivity() {
                 onRequestLocation = ::requestForegroundLocation,
                 onRequestBackgroundLocation = ::openBackgroundLocationSettings,
                 onRequestNotifications = ::requestNotifications,
+                onOpenAccessibilitySettings = ::openAccessibilitySettings,
+                onRequestScreenCapture = ::requestScreenCapture,
+                onStopScreenCapture = ::stopScreenCapture,
                 onRequestAdmin = ::requestAdmin,
                 onLockDevice = ::lockDevice,
                 onRebootDevice = ::rebootDevice,
@@ -127,6 +150,8 @@ class MainActivity : ComponentActivity() {
         notificationsGranted =
             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        touchControlEnabled = KerynthControlAccessibilityService.isEnabled(this)
+        screenCaptureActive = ScreenCaptureService.isActive()
         serverRunning = preferences.getBoolean("server_running", false)
         pairingCode = preferences.getString("pair_code", "") ?: ""
         paired = preferences.getString("auth_token", null) != null
@@ -160,6 +185,23 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    private fun openAccessibilitySettings() {
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun requestScreenCapture() {
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun stopScreenCapture() {
+        startService(
+            Intent(this, ScreenCaptureService::class.java)
+                .setAction(ScreenCaptureService.ACTION_STOP)
+        )
+        screenCaptureActive = false
     }
 
     private fun requestAdmin() {
@@ -255,6 +297,8 @@ private fun AgentScreen(
     locationGranted: Boolean,
     backgroundLocationGranted: Boolean,
     notificationsGranted: Boolean,
+    touchControlEnabled: Boolean,
+    screenCaptureActive: Boolean,
     serverRunning: Boolean,
     pairingCode: String,
     paired: Boolean,
@@ -263,6 +307,9 @@ private fun AgentScreen(
     onRequestLocation: () -> Unit,
     onRequestBackgroundLocation: () -> Unit,
     onRequestNotifications: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onRequestScreenCapture: () -> Unit,
+    onStopScreenCapture: () -> Unit,
     onRequestAdmin: () -> Unit,
     onLockDevice: () -> Unit,
     onRebootDevice: () -> Unit,
@@ -324,6 +371,13 @@ private fun AgentScreen(
                         onRequestBackgroundLocation
                     )
                     PermissionRow(
+                        "Удалённое управление касаниями",
+                        if (touchControlEnabled) "Включено" else "Не включено",
+                        "Позволяет сопряжённой Console нажимать, свайпать, выполнять навигацию и вводить текст в активное поле. Включается вручную в настройках Android.",
+                        if (touchControlEnabled) null else "Открыть настройки",
+                        onOpenAccessibilitySettings
+                    )
+                    PermissionRow(
                         "Блокировка экрана",
                         if (adminActive) "Device Admin активен" else "Не активировано",
                         "Разрешает блокировку после команды от сопряжённой Console.",
@@ -371,6 +425,23 @@ private fun AgentScreen(
                         color = Color(0xFF8193A9),
                         fontSize = 12.sp
                     )
+                }
+
+                SectionCard(
+                    "Трансляция экрана",
+                    "Перед каждой новой сессией Android попросит подтвердить захват. Во время трансляции в уведомлениях будет виден статус и кнопка остановки."
+                ) {
+                    Text(
+                        if (screenCaptureActive) "Экран транслируется" else "Трансляция выключена",
+                        color = if (screenCaptureActive) Color(0xFF86D6A3) else Color(0xFFFFC27A),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Button(
+                        onClick = if (screenCaptureActive) onStopScreenCapture else onRequestScreenCapture,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (screenCaptureActive) "Остановить трансляцию" else "Разрешить трансляцию экрана")
+                    }
                 }
 
                 SectionCard("Lost Mode", "Дистанционная блокировка требует активного Device Admin. Перезагрузка работает только при Device Owner.") {
