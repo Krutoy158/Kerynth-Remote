@@ -66,6 +66,8 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+private data class RemoteAppEntry(val label: String, val packageName: String)
+
 class MainActivity : ComponentActivity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val screenExecutor = Executors.newSingleThreadScheduledExecutor()
@@ -83,9 +85,7 @@ class MainActivity : ComponentActivity() {
     private var screenStreaming by mutableStateOf(false)
     private var screenFrame by mutableStateOf<Bitmap?>(null)
     private var typedText by mutableStateOf("")
-    private var installedApps by mutableStateOf<List<AppEntry>>(emptyList())
-
-    private data class AppEntry(val label: String, val packageName: String)
+    private var installedApps by mutableStateOf<List<RemoteAppEntry>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -334,7 +334,7 @@ class MainActivity : ComponentActivity() {
                     val item = array.optJSONObject(index) ?: return@mapNotNull null
                     val label = item.optString("label").take(80)
                     val packageName = item.optString("packageName").take(255)
-                    if (label.isBlank() || packageName.isBlank()) null else AppEntry(label, packageName)
+                    if (label.isBlank() || packageName.isBlank()) null else RemoteAppEntry(label, packageName)
                 }
                 runOnUiThread {
                     installedApps = entries
@@ -579,8 +579,12 @@ private fun ConsoleScreen(
     deviceInfo: String,
     locationInfo: String,
     messageText: String,
+    typedText: String,
     paired: Boolean,
     busy: Boolean,
+    screenStreaming: Boolean,
+    screenFrame: Bitmap?,
+    installedApps: List<RemoteAppEntry>,
     onHostChange: (String) -> Unit,
     onPairCodeChange: (String) -> Unit,
     onMessageChange: (String) -> Unit,
@@ -591,9 +595,19 @@ private fun ConsoleScreen(
     onSignal: () -> Unit,
     onSendMessage: () -> Unit,
     onSendImage: (Uri) -> Unit,
-    onReboot: () -> Unit
+    onReboot: () -> Unit,
+    onStartScreenStream: () -> Unit,
+    onStopScreenStream: () -> Unit,
+    onScreenTap: (Double, Double) -> Unit,
+    onScreenSwipe: (Double, Double, Double, Double) -> Unit,
+    onNavigate: (String) -> Unit,
+    onTypedTextChange: (String) -> Unit,
+    onSendTypedText: () -> Unit,
+    onLoadApps: () -> Unit,
+    onOpenApp: (String) -> Unit
 ) {
     var confirmReboot by remember { mutableStateOf(false) }
+    var appsExpanded by remember { mutableStateOf(false) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) onSendImage(uri)
     }
@@ -683,16 +697,112 @@ private fun ConsoleScreen(
                     }
                 }
 
-                SectionCard("Изображения и экран", "Изображения можно отправлять в Agent. Захват экрана требует отдельного системного подтверждения на управляемом телефоне.") {
+                SectionCard(
+                    "Удалённый экран",
+                    "Нажимай на изображение или проводи пальцем по нему. Agent должен предварительно разрешить трансляцию и специальные возможности."
+                ) {
                     Button(
+                        onClick = if (screenStreaming) onStopScreenStream else onStartScreenStream,
+                        enabled = paired && !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (screenStreaming) "Остановить просмотр" else "Подключить живой экран")
+                    }
+                    if (screenFrame != null) {
+                        Image(
+                            bitmap = screenFrame.asImageBitmap(),
+                            contentDescription = "Экран управляемого телефона",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(screenFrame.width.toFloat() / screenFrame.height.toFloat())
+                                .pointerInput(screenFrame) {
+                                    detectTapGestures { point ->
+                                        onScreenTap(
+                                            (point.x / size.width.coerceAtLeast(1)).toDouble(),
+                                            (point.y / size.height.coerceAtLeast(1)).toDouble()
+                                        )
+                                    }
+                                }
+                                .pointerInput(screenFrame) {
+                                    var dragStart = Offset.Zero
+                                    var dragEnd = Offset.Zero
+                                    detectDragGestures(
+                                        onDragStart = {
+                                            dragStart = it
+                                            dragEnd = it
+                                        },
+                                        onDragEnd = {
+                                            if ((dragEnd - dragStart).getDistance() > 16f) {
+                                                onScreenSwipe(
+                                                    (dragStart.x / size.width.coerceAtLeast(1)).toDouble(),
+                                                    (dragStart.y / size.height.coerceAtLeast(1)).toDouble(),
+                                                    (dragEnd.x / size.width.coerceAtLeast(1)).toDouble(),
+                                                    (dragEnd.y / size.height.coerceAtLeast(1)).toDouble()
+                                                )
+                                            }
+                                        },
+                                        onDragCancel = {},
+                                        onDrag = { change, _ ->
+                                            dragEnd = change.position
+                                            change.consume()
+                                        }
+                                    )
+                                },
+                            contentScale = ContentScale.FillBounds
+                        )
+                    } else {
+                        Text(
+                            if (screenStreaming) "Жду первый кадр…" else "Экран ещё не подключён.",
+                            color = Color(0xFF9EADBF),
+                            fontSize = 12.sp
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { onNavigate("back") }, enabled = paired && screenStreaming) { Text("Назад") }
+                        OutlinedButton(onClick = { onNavigate("home") }, enabled = paired && screenStreaming) { Text("Домой") }
+                        OutlinedButton(onClick = { onNavigate("recents") }, enabled = paired && screenStreaming) { Text("Недавние") }
+                    }
+                    OutlinedButton(onClick = { onNavigate("notifications") }, enabled = paired && screenStreaming, modifier = Modifier.fillMaxWidth()) {
+                        Text("Открыть уведомления")
+                    }
+                    OutlinedButton(onClick = onLoadApps, enabled = paired && !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Загрузить приложения Agent")
+                    }
+                    Button(onClick = { appsExpanded = true }, enabled = paired && installedApps.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                        Text("Открыть приложение")
+                    }
+                    DropdownMenu(expanded = appsExpanded, onDismissRequest = { appsExpanded = false }) {
+                        installedApps.take(60).forEach { app ->
+                            DropdownMenuItem(
+                                text = { Text(app.label) },
+                                onClick = {
+                                    appsExpanded = false
+                                    onOpenApp(app.packageName)
+                                }
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = typedText,
+                        onValueChange = onTypedTextChange,
+                        label = { Text("Ввод текста в активное поле Agent") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 1,
+                        maxLines = 3
+                    )
+                    OutlinedButton(
+                        onClick = onSendTypedText,
+                        enabled = paired && !busy && typedText.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Ввести текст")
+                    }
+                    OutlinedButton(
                         onClick = { imagePicker.launch("image/*") },
                         enabled = paired && !busy,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Выбрать и отправить изображение")
-                    }
-                    OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-                        Text("Трансляция экрана — следующий этап")
                     }
                 }
 
