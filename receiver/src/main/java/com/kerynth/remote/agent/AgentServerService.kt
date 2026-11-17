@@ -223,8 +223,98 @@ class AgentServerService : Service() {
             "message" -> receiveMessage(request)
             "signal" -> playSignal()
             "image" -> receiveImage(request)
+            "tap" -> dispatchTap(request)
+            "swipe" -> dispatchSwipe(request)
+            "navigate" -> dispatchNavigation(request)
+            "list_apps" -> listApps()
+            "open_app" -> openApp(request)
+            "text" -> setFocusedText(request)
             else -> JSONObject().put("ok", false).put("error", "unknown_command")
         }
+    }
+
+    private fun controlServiceRequired(): JSONObject {
+        return JSONObject().put("ok", false).put("error", "accessibility_service_required")
+    }
+
+    private fun dispatchTap(request: JSONObject): JSONObject {
+        if (!KerynthControlAccessibilityService.isEnabled(this)) return controlServiceRequired()
+        val x = request.optDouble("x", -1.0)
+        val y = request.optDouble("y", -1.0)
+        if (x !in 0.0..1.0 || y !in 0.0..1.0) {
+            return JSONObject().put("ok", false).put("error", "invalid_coordinates")
+        }
+        val accepted = KerynthControlAccessibilityService.tap(this, x, y)
+        return JSONObject()
+            .put("ok", accepted)
+            .put("result", if (accepted) "tap_dispatched" else "gesture_rejected")
+    }
+
+    private fun dispatchSwipe(request: JSONObject): JSONObject {
+        if (!KerynthControlAccessibilityService.isEnabled(this)) return controlServiceRequired()
+        val coordinates = listOf(
+            request.optDouble("startX", -1.0),
+            request.optDouble("startY", -1.0),
+            request.optDouble("endX", -1.0),
+            request.optDouble("endY", -1.0)
+        )
+        if (coordinates.any { it !in 0.0..1.0 }) {
+            return JSONObject().put("ok", false).put("error", "invalid_coordinates")
+        }
+        val accepted = KerynthControlAccessibilityService.swipe(
+            this,
+            coordinates[0],
+            coordinates[1],
+            coordinates[2],
+            coordinates[3],
+            request.optLong("duration", 350L)
+        )
+        return JSONObject()
+            .put("ok", accepted)
+            .put("result", if (accepted) "swipe_dispatched" else "gesture_rejected")
+    }
+
+    private fun dispatchNavigation(request: JSONObject): JSONObject {
+        if (!KerynthControlAccessibilityService.isEnabled(this)) return controlServiceRequired()
+        val action = request.optString("action")
+        val accepted = KerynthControlAccessibilityService.globalAction(action)
+        return JSONObject()
+            .put("ok", accepted)
+            .put("result", if (accepted) action else "navigation_rejected")
+    }
+
+    private fun listApps(): JSONObject {
+        if (!KerynthControlAccessibilityService.isEnabled(this)) return controlServiceRequired()
+        return JSONObject()
+            .put("ok", true)
+            .put("apps", KerynthControlAccessibilityService.installedApps(this))
+    }
+
+    private fun openApp(request: JSONObject): JSONObject {
+        if (!KerynthControlAccessibilityService.isEnabled(this)) return controlServiceRequired()
+        val packageName = request.optString("packageName")
+        if (packageName.isBlank() || packageName.length > 255 || packageName == this.packageName) {
+            return JSONObject().put("ok", false).put("error", "invalid_package")
+        }
+        val apps = KerynthControlAccessibilityService.installedApps(this)
+        val isLaunchable = (0 until apps.length()).any { index ->
+            apps.optJSONObject(index)?.optString("packageName") == packageName
+        }
+        if (!isLaunchable) return JSONObject().put("ok", false).put("error", "app_not_found")
+        val accepted = KerynthControlAccessibilityService.openApp(this, packageName)
+        return JSONObject()
+            .put("ok", accepted)
+            .put("result", if (accepted) "app_opened" else "app_open_failed")
+    }
+
+    private fun setFocusedText(request: JSONObject): JSONObject {
+        if (!KerynthControlAccessibilityService.isEnabled(this)) return controlServiceRequired()
+        val value = request.optString("value")
+        if (value.length > 2000) return JSONObject().put("ok", false).put("error", "text_too_long")
+        val accepted = KerynthControlAccessibilityService.setFocusedText(value)
+        return JSONObject()
+            .put("ok", accepted)
+            .put("result", if (accepted) "text_entered" else "no_focused_text_field")
     }
 
     private fun statusResponse(): JSONObject {
@@ -243,6 +333,7 @@ class AgentServerService : Service() {
             .put("admin", admin)
             .put("deviceOwner", owner)
             .put("locationPermission", hasLocationPermission())
+            .put("touchControlEnabled", KerynthControlAccessibilityService.isEnabled(this))
     }
 
     private fun lockDevice(): JSONObject {
