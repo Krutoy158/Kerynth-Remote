@@ -11,13 +11,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Message
 import androidx.compose.material.icons.rounded.Monitor
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -52,6 +57,7 @@ private fun ConsoleScreen() {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -142,9 +148,48 @@ private fun ConsoleScreen() {
                     description = "Запросить сеанс, который владелец подтверждает на Agent"
                 )
 
-                Spacer(modifier = Modifier.weight(1f))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF162334)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Lost Mode",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Противоугонные команды для сопряжённого Agent. Доступность будет проверяться по фактическим полномочиям управляемого телефона.",
+                            color = Color(0xFFB5C2D2),
+                            fontSize = 13.sp
+                        )
+                        ActionCard(
+                            icon = { androidx.compose.material3.Icon(Icons.Rounded.Lock, null, tint = Color(0xFF9CCBFF)) },
+                            title = "Заблокировать",
+                            description = "Требует активного Device Admin на Agent"
+                        )
+                        ActionCard(
+                            icon = { androidx.compose.material3.Icon(Icons.Rounded.LocationOn, null, tint = Color(0xFF9CCBFF)) },
+                            title = "Найти устройство",
+                            description = "Последняя доступная позиция и время обновления после разрешения фоновой геолокации"
+                        )
+                        ActionCard(
+                            icon = { androidx.compose.material3.Icon(Icons.Rounded.Refresh, null, tint = Color(0xFF9CCBFF)) },
+                            title = "Перезагрузить",
+                            description = "Только если Agent зарегистрирован как Device Owner"
+                        )
+                    }
+                }
+
                 Text(
-                    text = "Console • 0.2.0 • Команды пока не подключены",
+                    text = "Console • 0.3.0 • Сопряжение и удалённые команды ещё не подключены",
                     color = Color(0xFF71839A),
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -164,7 +209,7 @@ private fun ActionCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF162334)
+            containerColor = Color(0xFF1B2B3D)
         )
     ) {
         Row(
