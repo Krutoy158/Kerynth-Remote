@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="device_admin_description">Allows Kerynth Remote to lock this device when the owner activates Lost Mode.</string>
-    <string name="control_service_description">Allows Kerynth Remote to perform taps, swipes and navigation actions only after you manually enable this service and pair your own Console. It does not read screen content.</string>
+    <string name="control_service_description">Allows your paired Kerynth Remote Console to send taps, swipes, navigation commands, launch apps and enter text in the currently focused field after you manually enable this service. Screen sharing requires a separate Android system confirmation.</string>
 </resources>
