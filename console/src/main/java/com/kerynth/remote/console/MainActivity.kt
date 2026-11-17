@@ -1,5 +1,7 @@
 package com.kerynth.remote.console
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -7,6 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.aspectRatio
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +25,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -33,6 +41,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,6 +59,8 @@ import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
@@ -54,7 +68,9 @@ import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : ComponentActivity() {
     private val executor = Executors.newSingleThreadExecutor()
+    private val screenExecutor = Executors.newSingleThreadScheduledExecutor()
     private val preferences by lazy { getSharedPreferences("kerynth_console", MODE_PRIVATE) }
+    private var screenTask: ScheduledFuture<*>? = null
 
     private var host by mutableStateOf("")
     private var pairCode by mutableStateOf("")
@@ -64,6 +80,12 @@ class MainActivity : ComponentActivity() {
     private var messageText by mutableStateOf("")
     private var paired by mutableStateOf(false)
     private var busy by mutableStateOf(false)
+    private var screenStreaming by mutableStateOf(false)
+    private var screenFrame by mutableStateOf<Bitmap?>(null)
+    private var typedText by mutableStateOf("")
+    private var installedApps by mutableStateOf<List<AppEntry>>(emptyList())
+
+    private data class AppEntry(val label: String, val packageName: String)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,8 +99,12 @@ class MainActivity : ComponentActivity() {
                 deviceInfo = deviceInfo,
                 locationInfo = locationInfo,
                 messageText = messageText,
+                typedText = typedText,
                 paired = paired,
                 busy = busy,
+                screenStreaming = screenStreaming,
+                screenFrame = screenFrame,
+                installedApps = installedApps,
                 onHostChange = {
                     host = it
                     preferences.edit().putString("host", it.trim()).apply()
@@ -92,12 +118,24 @@ class MainActivity : ComponentActivity() {
                 onSignal = { runCommand(JSONObject().put("command", "signal")) },
                 onSendMessage = ::sendMessage,
                 onSendImage = ::sendImage,
-                onReboot = { runCommand(JSONObject().put("command", "reboot")) }
+                onReboot = { runCommand(JSONObject().put("command", "reboot")) },
+                onStartScreenStream = ::startScreenStream,
+                onStopScreenStream = ::stopScreenStream,
+                onScreenTap = ::sendTap,
+                onScreenSwipe = ::sendSwipe,
+                onNavigate = ::sendNavigation,
+                onTypedTextChange = { typedText = it },
+                onSendTypedText = ::sendTypedText,
+                onLoadApps = ::loadApps,
+                onOpenApp = ::openApp
             )
         }
     }
 
     override fun onDestroy() {
+        screenStreaming = false
+        screenTask?.cancel(true)
+        screenExecutor.shutdownNow()
         executor.shutdownNow()
         super.onDestroy()
     }
