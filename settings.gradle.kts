@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "KerynthRemote"
-include(":app")
+include(":receiver", ":console")
