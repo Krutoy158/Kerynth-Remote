@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -19,9 +18,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ScreenCaptureService : Service() {
@@ -55,6 +54,7 @@ class ScreenCaptureService : Service() {
     }
 
     private val stopped = AtomicBoolean(false)
+    private var lastFrameElapsed = 0L
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
     private var projection: MediaProjection? = null
@@ -134,6 +134,9 @@ class ScreenCaptureService : Service() {
         reader.setOnImageAvailableListener({ source ->
             val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             image.use {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastFrameElapsed < 250L) return@use
+                lastFrameElapsed = now
                 runCatching {
                     val plane = it.planes.first()
                     val buffer = plane.buffer
@@ -199,6 +202,7 @@ class ScreenCaptureService : Service() {
     private fun stopCapture() {
         if (!stopped.compareAndSet(false, true)) return
         active = false
+        lastFrameElapsed = 0L
         latestFrame = null
         frameWidth = 0
         frameHeight = 0
