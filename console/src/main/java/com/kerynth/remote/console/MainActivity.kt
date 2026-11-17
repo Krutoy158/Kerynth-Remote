@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -81,42 +80,12 @@ private fun ConsoleScreen() {
                     )
                 }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF162334)
-                    )
+                SectionCard(
+                    title = "Мои устройства",
+                    description = "Пока нет сопряжённых устройств. Добавление будет доступно после настройки защищённого QR-сопряжения."
                 ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            androidx.compose.material3.Icon(
-                                imageVector = Icons.Rounded.Devices,
-                                contentDescription = null,
-                                tint = Color(0xFF9CCBFF)
-                            )
-                            Text(
-                                text = "Мои устройства",
-                                color = Color.White,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        Text(
-                            text = "Пока нет сопряжённых устройств",
-                            color = Color(0xFFB5C2D2)
-                        )
-                        Button(
-                            onClick = {},
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Добавить устройство — следующий этап")
-                        }
+                    Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                        Text("Добавить устройство")
                     }
                 }
 
@@ -140,61 +109,64 @@ private fun ConsoleScreen() {
                 ActionCard(
                     icon = { androidx.compose.material3.Icon(Icons.Rounded.NotificationsActive, null, tint = Color(0xFF9CCBFF)) },
                     title = "Звуковой сигнал",
-                    description = "Воспроизвести разрешённый сигнал на Agent"
+                    description = "Опциональный, видимый и отключаемый сигнал на Agent"
                 )
                 ActionCard(
                     icon = { androidx.compose.material3.Icon(Icons.Rounded.Monitor, null, tint = Color(0xFF9CCBFF)) },
                     title = "Трансляция экрана",
-                    description = "Запросить сеанс, который владелец подтверждает на Agent"
+                    description = "Каждый сеанс требует системного подтверждения на Agent"
                 )
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF162334)
-                    )
+                SectionCard(
+                    title = "Lost Mode",
+                    description = "Статус возможностей будет получен от Agent после сопряжения. Команды не будут отправляться на неподтверждённые устройства."
                 ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = "Lost Mode",
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "Противоугонные команды для сопряжённого Agent. Доступность будет проверяться по фактическим полномочиям управляемого телефона.",
-                            color = Color(0xFFB5C2D2),
-                            fontSize = 13.sp
-                        )
-                        ActionCard(
-                            icon = { androidx.compose.material3.Icon(Icons.Rounded.Lock, null, tint = Color(0xFF9CCBFF)) },
-                            title = "Заблокировать",
-                            description = "Требует активного Device Admin на Agent"
-                        )
-                        ActionCard(
-                            icon = { androidx.compose.material3.Icon(Icons.Rounded.LocationOn, null, tint = Color(0xFF9CCBFF)) },
-                            title = "Найти устройство",
-                            description = "Последняя доступная позиция и время обновления после разрешения фоновой геолокации"
-                        )
-                        ActionCard(
-                            icon = { androidx.compose.material3.Icon(Icons.Rounded.Refresh, null, tint = Color(0xFF9CCBFF)) },
-                            title = "Перезагрузить",
-                            description = "Только если Agent зарегистрирован как Device Owner"
-                        )
-                    }
+                    ActionCard(
+                        icon = { androidx.compose.material3.Icon(Icons.Rounded.Lock, null, tint = Color(0xFF9CCBFF)) },
+                        title = "Заблокировать",
+                        description = "Доступно, если владелец активировал Device Admin на Agent"
+                    )
+                    ActionCard(
+                        icon = { androidx.compose.material3.Icon(Icons.Rounded.LocationOn, null, tint = Color(0xFF9CCBFF)) },
+                        title = "Найти устройство",
+                        description = "Последняя переданная позиция и время её обновления"
+                    )
+                    ActionCard(
+                        icon = { androidx.compose.material3.Icon(Icons.Rounded.Refresh, null, tint = Color(0xFF9CCBFF)) },
+                        title = "Перезагрузить",
+                        description = "Только при Device Owner на Agent"
+                    )
                 }
 
                 Text(
-                    text = "Console • 0.3.0 • Сопряжение и удалённые команды ещё не подключены",
+                    text = "Console • 0.4.0 • Сопряжение и команды ещё не подключены",
                     color = Color(0xFF71839A),
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SectionCard(
+    title: String,
+    description: String,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF162334))
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+            Text(description, color = Color(0xFFB5C2D2), fontSize = 13.sp)
+            content()
         }
     }
 }
@@ -208,9 +180,7 @@ private fun ActionCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1B2B3D)
-        )
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B2B3D))
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
