@@ -3,6 +3,8 @@ package com.kerynth.remote.console
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Bundle
 import android.util.Base64
 import androidx.activity.ComponentActivity
@@ -68,6 +70,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 private data class RemoteAppEntry(val label: String, val packageName: String)
+private data class RemoteDevice(val name: String, val host: String, val port: Int)
 
 class MainActivity : ComponentActivity() {
     private val executor = Executors.newSingleThreadExecutor()
@@ -76,6 +79,9 @@ class MainActivity : ComponentActivity() {
     private var screenTask: ScheduledFuture<*>? = null
 
     private var host by mutableStateOf("")
+    private var discoveredDevices by mutableStateOf<List<RemoteDevice>>(emptyList())
+    private var scanning by mutableStateOf(false)
+    private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var pairCode by mutableStateOf("")
     private var status by mutableStateOf("Не подключено")
     private var deviceInfo by mutableStateOf("Добавь Agent из той же Wi-Fi-сети.")
@@ -96,6 +102,8 @@ class MainActivity : ComponentActivity() {
             ConsoleScreen(
                 host = host,
                 pairCode = pairCode,
+                discoveredDevices = discoveredDevices,
+                scanning = scanning,
                 status = status,
                 deviceInfo = deviceInfo,
                 locationInfo = locationInfo,
@@ -106,6 +114,8 @@ class MainActivity : ComponentActivity() {
                 screenStreaming = screenStreaming,
                 screenFrame = screenFrame,
                 installedApps = installedApps,
+                onDiscover = ::discoverAgents,
+                onSelectDevice = ::selectDevice,
                 onHostChange = {
                     host = it
                     preferences.edit().putString("host", it.trim()).apply()
@@ -136,56 +146,104 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         screenStreaming = false
         screenTask?.cancel(true)
+        stopDiscovery()
         screenExecutor.shutdownNow()
         executor.shutdownNow()
         super.onDestroy()
+    }
+
+    private fun discoverAgents() {
+        stopDiscovery()
+        discoveredDevices = emptyList()
+        scanning = true
+        status = "Ищу Agent в локальной сети…"
+        val manager = getSystemService(NsdManager::class.java)
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {}
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (serviceInfo.serviceType.trimEnd('.') != "_kerynthremote._tcp") return
+                manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                    override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {}
+                    override fun onServiceResolved(info: NsdServiceInfo) {
+                        val address = info.host?.hostAddress ?: return
+                        val device = RemoteDevice(info.serviceName, address, info.port)
+                        runOnUiThread {
+                            discoveredDevices = (discoveredDevices.filterNot { it.host == address } + device)
+                            status = "Найдено устройств: ${discoveredDevices.size}"
+                        }
+                    }
+                })
+            }
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                runOnUiThread {
+                    discoveredDevices = discoveredDevices.filterNot { it.name == serviceInfo.serviceName }
+                }
+            }
+            override fun onDiscoveryStopped(serviceType: String) { scanning = false }
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                scanning = false
+                runCatching { manager.stopServiceDiscovery(this) }
+                runOnUiThread { status = "Не удалось начать поиск Agent ($errorCode)" }
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                scanning = false
+                runCatching { manager.stopServiceDiscovery(this) }
+            }
+        }
+        discoveryListener = listener
+        runCatching { manager.discoverServices("_kerynthremote._tcp.", NsdManager.PROTOCOL_DNS_SD, listener) }
+            .onFailure {
+                scanning = false
+                status = it.message ?: "Ошибка поиска устройств"
+            }
+    }
+
+    private fun stopDiscovery() {
+        val listener = discoveryListener ?: return
+        runCatching { getSystemService(NsdManager::class.java).stopServiceDiscovery(listener) }
+        discoveryListener = null
+        scanning = false
+    }
+
+    private fun selectDevice(device: RemoteDevice) {
+        host = device.host
+        preferences.edit().putString("host", device.host).apply()
+        status = "${device.name} выбран"
     }
 
     private fun connectOrPair() {
         if (busy) return
         val target = host.trim()
         if (target.isBlank()) {
-            status = "Введи IP-адрес Agent."
+            status = "Сначала найди Agent в локальной сети."
             return
         }
         val existingToken = preferences.getString("auth_token", null)
-        if (existingToken == null && pairCode.length < 8) {
-            status = "Введи одноразовый код с экрана Agent."
-            return
-        }
-
         busy = true
-        status = "Подключение…"
+        status = if (existingToken == null) "Запрос сопряжения… Подтверди его на Agent." else "Подключение…"
         executor.execute {
             try {
                 var token = existingToken
                 if (token == null) {
-                    val derivedToken = Socket().use { socket ->
+                    val response = Socket().use { socket ->
                         socket.connect(InetSocketAddress(target, SERVER_PORT), 5000)
                         socket.soTimeout = 10000
                         val input = BufferedInputStream(socket.getInputStream())
                         val output = socket.getOutputStream()
                         val greeting = JSONObject(readLine(input, 16_384))
-                        val challenge = decode(greeting.getString("challenge"))
-                        val deviceId = greeting.getString("deviceId")
-                        val proof = encode(hmac(pairCode.toByteArray(StandardCharsets.UTF_8), challenge))
-                        writeJson(output, JSONObject().put("pairProof", proof))
-                        val response = JSONObject(readLine(input, 16_384))
-                        if (!response.optBoolean("paired")) {
-                            throw IllegalStateException(errorText(response.optString("error")))
-                        }
-                        val derived = deriveToken(pairCode, deviceId)
-                        preferences.edit().putString("auth_token", derived).putString("host", target).apply()
-                        derived
+                        writeJson(output, JSONObject().put("requestPair", true))
+                        JSONObject(readLine(input, 16_384))
                     }
-                    token = derivedToken
+                    if (!response.optBoolean("paired")) {
+                        throw IllegalStateException(errorText(response.optString("error")))
+                    }
+                    token = response.getString("token")
+                    preferences.edit().putString("auth_token", token).putString("host", target).apply()
                     runOnUiThread {
                         paired = true
-                        pairCode = ""
-                        status = "Сопряжение выполнено. Проверяю устройство…"
+                        status = "Сопряжение подтверждено. Проверяю устройство…"
                     }
                 }
-
                 val response = sendAuthenticated(target, token!!, JSONObject().put("command", "ping"))
                 runOnUiThread {
                     paired = true
@@ -545,9 +603,7 @@ class MainActivity : ComponentActivity() {
 
     private fun errorText(code: String): String {
         return when (code) {
-            "invalid_pair_code" -> "Неверный код сопряжения."
-            "pair_code_expired" -> "Код истёк. Создай новый на Agent."
-            "try_later" -> "Слишком много попыток. Подожди минуту."
+            "approval_required" -> "На Agent нажми «Разрешить первое подключение», затем повтори подключение."
             "already_paired" -> "Agent уже сопряжён. Отзови старый доступ на Agent."
             "unauthorized" -> "Доступ отозван или ключ не совпадает."
             "device_admin_required" -> "На Agent не активирован Device Admin."
@@ -576,6 +632,8 @@ class MainActivity : ComponentActivity() {
 private fun ConsoleScreen(
     host: String,
     pairCode: String,
+    discoveredDevices: List<RemoteDevice>,
+    scanning: Boolean,
     status: String,
     deviceInfo: String,
     locationInfo: String,
@@ -586,6 +644,8 @@ private fun ConsoleScreen(
     screenStreaming: Boolean,
     screenFrame: Bitmap?,
     installedApps: List<RemoteAppEntry>,
+    onDiscover: () -> Unit,
+    onSelectDevice: (RemoteDevice) -> Unit,
     onHostChange: (String) -> Unit,
     onPairCodeChange: (String) -> Unit,
     onMessageChange: (String) -> Unit,
@@ -625,26 +685,25 @@ private fun ConsoleScreen(
                     Text("Личная панель управления", color = Color(0xFF9EADBF))
                 }
 
-                SectionCard("Подключение", "Введи локальный IP Agent, показанный на втором телефоне.") {
-                    OutlinedTextField(
-                        value = host,
-                        onValueChange = onHostChange,
-                        label = { Text("IP-адрес Agent") },
-                        placeholder = { Text("192.168.1.20") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (!paired) {
-                        OutlinedTextField(
-                            value = pairCode,
-                            onValueChange = onPairCodeChange,
-                            label = { Text("Одноразовый код с Agent") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                SectionCard("Подключение", "Найди Agent в той же Wi-Fi-сети и выбери его.") {
+                    Button(onClick = onDiscover, enabled = !scanning, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (scanning) "Ищу устройства…" else "Найти устройства")
                     }
-                    Button(onClick = onConnect, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (busy) "Подождите…" else if (paired) "Подключиться" else "Сопрячь устройства")
+                    if (discoveredDevices.isEmpty()) {
+                        Text("Найденные устройства появятся здесь.", color = Color(0xFF9EADBF), fontSize = 12.sp)
+                    } else {
+                        discoveredDevices.forEach { device ->
+                            OutlinedButton(
+                                onClick = { onSelectDevice(device) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("${device.name} • ${device.host}")
+                            }
+                        }
+                    }
+                    Text("Выбрано: " + if (host.isBlank()) "нет устройства" else host, color = Color.White)
+                    Button(onClick = onConnect, enabled = !busy && host.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
+                        Text(if (busy) "Подождите…" else if (paired) "Подключиться" else "Запросить подключение")
                     }
                     if (paired) {
                         OutlinedButton(onClick = onForgetDevice, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -654,7 +713,7 @@ private fun ConsoleScreen(
                     Text(status, color = Color(0xFF9CCBFF), fontSize = 13.sp)
                     Text(deviceInfo, color = Color(0xFFB5C2D2), fontSize = 12.sp)
                     Text(
-                        "Текущая версия работает напрямую в одной Wi-Fi-сети. Удалённое подключение через мобильный интернет требует размещённого relay-сервера.",
+                        "Работает в одной локальной Wi-Fi-сети. Первое сопряжение нужно подтвердить на Agent.",
                         color = Color(0xFF8193A9),
                         fontSize = 12.sp
                     )
