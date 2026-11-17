@@ -5,6 +5,8 @@ import android.accessibilityservice.GestureDescription
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.Path
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
@@ -47,13 +49,29 @@ class KerynthControlAccessibilityService : AccessibilityService() {
         fun globalAction(action: String): Boolean {
             val service = instance ?: return false
             val actionId = when (action) {
-                "back" -> GLOBAL_ACTION_BACK
-                "home" -> GLOBAL_ACTION_HOME
-                "recents" -> GLOBAL_ACTION_RECENTS
-                "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
+                "back" -> AccessibilityService.GLOBAL_ACTION_BACK
+                "home" -> AccessibilityService.GLOBAL_ACTION_HOME
+                "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
+                "notifications" -> AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
                 else -> return false
             }
             return service.performGlobalAction(actionId)
+        }
+
+        fun setFocusedText(text: String): Boolean {
+            if (text.length > 2000) return false
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            val target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+            return try {
+                val arguments = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                }
+                target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            } finally {
+                target.recycle()
+                root.recycle()
+            }
         }
 
         fun openApp(context: Context, packageName: String): Boolean {
